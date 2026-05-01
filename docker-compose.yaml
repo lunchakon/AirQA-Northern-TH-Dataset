@@ -1,4 +1,25 @@
-version: "3.8"
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.2-python3.11
+  environment:
+    &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?AIRFLOW__CORE__FERNET_KEY must be set in .env}
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airqadb
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW__WEBSERVER__SECRET_KEY:?AIRFLOW__WEBSERVER__SECRET_KEY must be set in .env}
+  env_file:
+    - .env
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./data:/opt/airflow/data
+    - ./requirements.txt:/requirements.txt
+    - ./tmp:/tmp
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
 
 services:
   postgres:
@@ -7,64 +28,64 @@ services:
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airqa
+      POSTGRES_DB: airqadb
     ports:
-      - "5434:5434"
+      - "5434:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airqadb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   airflow-init:
-    image: apache/airflow:2.8.3
+    <<: *airflow-common
     entrypoint: /bin/bash
-    command: -c "airflow db init && airflow users create \
-      --username admin --firstname AirQA --lastname Admin \
-      --role Admin --email admin@airqa.local --password admin"
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airqa
-      - AIRFLOW__CORE__FERNET_KEY=your_fernet_key_here
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
-      - AIRFLOW__WEBSERVER__SECRET_KEY=your_secret_key_here
-    depends_on:
-      - postgres
+    command:
+      - -c
+      - |
+        pip install -r /requirements.txt
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Air \
+          --lastname Flow \
+          --role Admin \
+          --email admin@example.com || true
+    restart: "no"
 
-  webserver:
-    image: apache/airflow:2.8.3
-    container_name: airqa_webserver
-    restart: always
-    depends_on:
-      - postgres
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airqa
-      - AIRFLOW__WEBSERVER__RBAC=True
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./scripts:/opt/airflow/scripts
-      - ./requirements.txt:/requirements.txt
+  airflow-webserver:
+    <<: *airflow-common
+    command: >
+      bash -c "pip install -r /requirements.txt && airflow webserver"
     ports:
-      - "8081:8081"
-    command: >
-      bash -c "pip install -r /requirements.txt &&
-               airflow webserver"
-
-  scheduler:
-    image: apache/airflow:2.8.3
-    container_name: airqa_scheduler
-    restart: always
+      - "8081:8080"
     depends_on:
-      - webserver
-      - postgres
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres/airqa
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./scripts:/opt/airflow/scripts
-      - ./requirements.txt:/requirements.txt
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
     command: >
-      bash -c "pip install -r /requirements.txt &&
-               airflow scheduler"
+      bash -c "pip install -r /requirements.txt && airflow scheduler"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: airqa_dashboard
+    volumes:
+      - ./data:/app/data:ro
+    ports:
+      - "8501:8501"
+    depends_on:
+      airflow-scheduler:
+        condition: service_started
 
 volumes:
   postgres_data:

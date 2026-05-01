@@ -25,6 +25,37 @@ The AirQA-Northern-TH-Dataset can be utilized for various purposes:
 - Policy Development: The data can be used to support policy development aimed at improving air quality in the Northern region of Thailand.
 ---------------
 
+## Dashboard
+
+This project includes a single-page Streamlit dashboard that reads generated CSV files from `data/`.
+
+Run the full stack:
+
+```bash
+docker compose up -d --build
+```
+
+Open:
+
+- Airflow: http://localhost:8081
+- Dashboard: http://localhost:8501
+
+The dashboard runs in a separate Docker service named `dashboard`, so it is isolated from the Airflow webserver and scheduler while sharing the CSV output folder as read-only data.
+
+### Data Collection Schedule
+
+The upgraded pipeline uses two AQICN station-level DAGs:
+
+- `airqa_station_discovery_dag`: runs once per day to refresh the Chiang Mai and Chiang Rai station catalog.
+- `airqa_station_observations_dag`: runs every 3 hours using cron `0 */3 * * *` to capture station observations and forecast data.
+
+The older city-level DAGs are paused by default after the upgrade.
+
+Generated files:
+
+- `data/airqa_station_catalog.csv`
+- `data/airqa_station_observations_YYYYMMDD_HHMMSS.csv`
+- `data/airqa_station_forecasts_YYYYMMDD_HHMMSS.csv`
 
 
 ### Real-Time Air Quality ETL Pipeline for Northern Thailand
